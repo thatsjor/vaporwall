@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cyberpunk Space Navigation</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: transparent;
+            font-family: 'Courier New', Courier, monospace;
+            user-select: none;
+        }
+
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+        }
+
+        /* Force pixelated rendering on the canvas for that retro PS1 / MS-DOS 3D vibe */
+        canvas {
+            width: 100vw !important;
+            height: 100vh !important;
+            image-rendering: -moz-crisp-edges;
+            image-rendering: -webkit-crisp-edges;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+        }
+    </style>
+    <!-- Import Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        let isInitialized = false;
+        let vaporConfig = null;
+        
+        window.onVaporConfigUpdate = function(config) {
+            vaporConfig = config;
+            if (!isInitialized) {
+                isInitialized = true;
+                initApp();
+            }
+        };
+
+        setTimeout(() => {
+            if (!isInitialized) {
+                console.warn("No vaporConfig received. Running with defaults.");
+                vaporConfig = {
+                    performance: { fps_limit: 60, resolution_scale: 0.25, enable_shadows: true, enable_antialiasing: false, detail_level: 1.0 },
+                    wall_specific: { speed_multiplier: 1.0 },
+                    colors: { use_pywal: true }
+                };
+                isInitialized = true;
+                initApp();
+            }
+        }, 500);
+
+        function initApp() {
+            // --- CORE SETUP ---
+            const container = document.getElementById('canvas-container');
+            const scene = new THREE.Scene();
+            
+            // Pywal Integration
+            const colors = window.pywal_colors || {
+                background: 0x1a0b2e,
+                color1: 0xff007c,
+                color2: 0x00f3ff,
+                color3: 0x39ff14,
+                color4: 0xffffff,
+                color5: 0x9400d3,
+                color6: 0xfcee0a,
+                color7: 0xff003c
+            };
+
+            scene.background = new THREE.Color(colors.background);
+            scene.fog = new THREE.FogExp2(colors.background, 0.002);
+
+            const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 3000);
+            camera.position.set(0, 100, 300);
+
+            // Function to update colors dynamically
+            window.updateColors = function(newColors) {
+                Object.assign(colors, newColors);
+                scene.background.set(colors.background);
+                scene.fog.color.set(colors.background);
+                ambientLight.color.set(colors.color1);
+                pointLight.color.set(colors.color1);
+                gridHelper.material.color.set(colors.color1);
+                // gridHelper doesn't easily update secondary color, but this is a start
+                sunMat.color.set(colors.color1);
+                sunCore.material.color.set(colors.color1);
+                planetA.material.emissive.set(colors.color3);
+                planetA.material.color.set(colors.color3).multiplyScalar(0.1);
+                planetB.material.emissive.set(colors.color2);
+                planetB.material.color.set(colors.color2).multiplyScalar(0.1);
+                moonB.material.emissive.set(colors.color1);
+                moonB.material.color.set(colors.color1).multiplyScalar(0.1);
+                planetC.material.emissive.set(colors.color6);
+                planetC.material.color.set(colors.color6).multiplyScalar(0.1);
+                ringMat.color.set(colors.color2);
+                planetD.material.emissive.set(colors.color5);
+                planetD.material.color.set(colors.color5).multiplyScalar(0.1);
+                moonD1.material.emissive.set(colors.color2);
+                moonD1.material.color.set(colors.color2).multiplyScalar(0.1);
+                moonD2.material.emissive.set(colors.color6);
+                moonD2.material.color.set(colors.color6).multiplyScalar(0.1);
+                planetE.material.emissive.set(colors.color7);
+                planetE.material.color.set(colors.color7).multiplyScalar(0.1);
+                brMat1.color.set(colors.color2);
+                brMat2.color.set(colors.color1);
+            };
+
+            // Retro pixelated renderer
+            const enableAA = vaporConfig.performance.enable_antialiasing;
+            const renderer = new THREE.WebGLRenderer({ antialias: enableAA, alpha: true });
+            
+            // Re-calculate pixel scale inside resize
+            let pixelScale = 1.0 / vaporConfig.performance.resolution_scale;
+            renderer.setSize(window.innerWidth / pixelScale, window.innerHeight / pixelScale, false); 
+            
+            renderer.shadowMap.enabled = vaporConfig.performance.enable_shadows;
+            renderer.shadowMap.type = THREE.BasicShadowMap;
+            container.appendChild(renderer.domElement);
+
+            const controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.maxDistance = 1500;
+
+            // --- LIGHTING ---
+            const ambientLight = new THREE.AmbientLight(colors.color1, 0.2); 
+            scene.add(ambientLight);
+
+            // Central Star Light (Neon Pink)
+            const pointLight = new THREE.PointLight(colors.color1, 3, 1500);
+            pointLight.position.set(0, 0, 0);
+            pointLight.castShadow = true;
+            pointLight.shadow.mapSize.width = 1024;
+            pointLight.shadow.mapSize.height = 1024;
+            scene.add(pointLight);
+
+            // --- SCENERY: SYNTHWAVE GRID ---
+            const gridHelper = new THREE.GridHelper(2000, 100, colors.color1, colors.color2);
+            gridHelper.position.y = -80;
+            scene.add(gridHelper);
+
+            // --- SCENERY: NEON STARS ---
+            const starsGeo = new THREE.BufferGeometry();
+            const starsCount = Math.floor(4000 * vaporConfig.performance.detail_level);
+            const posArray = new Float32Array(starsCount * 3);
+            const colorsArray = new Float32Array(starsCount * 3);
+            const colorPalette = [new THREE.Color(colors.color2), new THREE.Color(colors.color1), new THREE.Color(colors.color3), new THREE.Color(colors.color4)];
+            
+            for(let i = 0; i < starsCount; i++) {
+                posArray[i*3] = (Math.random() - 0.5) * 2000;
+                posArray[i*3+1] = (Math.random() - 0.5) * 2000;
+                posArray[i*3+2] = (Math.random() - 0.5) * 2000;
+                
+                const color = colorPalette[Math.floor(Math.random() * colorPalette.length)];
+                colorsArray[i*3] = color.r;
+                colorsArray[i*3+1] = color.g;
+                colorsArray[i*3+2] = color.b;
+            }
+            starsGeo.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+            starsGeo.setAttribute('color', new THREE.BufferAttribute(colorsArray, 3));
+            const starsMat = new THREE.PointsMaterial({ size: 2, vertexColors: true, transparent: true, opacity: 0.8 });
+            const starsMesh = new THREE.Points(starsGeo, starsMat);
+            scene.add(starsMesh);
+
+            // --- CELESTIAL BODIES ---
+            const interactables = [];
+            const celestialBodies = [];
+
+            // Helper to make neon materials
+            function getNeonMaterial(emissiveHex, wireframe = false) {
+                const baseColor = new THREE.Color(emissiveHex).clone().multiplyScalar(0.1);
+                return new THREE.MeshPhongMaterial({ 
+                    color: baseColor, 
+                    emissive: emissiveHex, 
+                    emissiveIntensity: 0.5,
+                    shininess: 100,
+                    wireframe: wireframe
+                });
+            }
+
+            // 0. The Sun (Hot Pink)
+            const sunGeo = new THREE.SphereGeometry(25, 16, 16);
+            const sunMat = new THREE.MeshBasicMaterial({ color: colors.color1, wireframe: true });
+            const sun = new THREE.Mesh(sunGeo, sunMat);
+            sun.userData = { radius: 25 };
+            scene.add(sun);
+            interactables.push(sun);
+
+            const sunCore = new THREE.Mesh(new THREE.SphereGeometry(23, 32, 32), new THREE.MeshBasicMaterial({color: colors.color1}));
+            sun.add(sunCore);
+
+            // 1. Planet A (Fast Inner, Toxic Green)
+            const pAGrp = new THREE.Group(); scene.add(pAGrp);
+            const planetA = new THREE.Mesh(new THREE.SphereGeometry(4, 16, 16), getNeonMaterial(colors.color3));
+            planetA.position.set(70, 0, 0);
+            planetA.userData = { radius: 4 };
+            pAGrp.add(planetA); interactables.push(planetA);
+            celestialBodies.push({ group: pAGrp, speed: 0.008 });
+
+            // 2. Planet B (Electric Blue + Pink Moon)
+            const pBGrp = new THREE.Group(); scene.add(pBGrp);
+            pBGrp.rotation.y = Math.PI / 4;
+            const planetB = new THREE.Mesh(new THREE.SphereGeometry(8, 32, 32), getNeonMaterial(colors.color2));
+            planetB.position.set(130, 0, 0);
+            planetB.userData = { radius: 8 };
+            pBGrp.add(planetB); interactables.push(planetB);
+            celestialBodies.push({ group: pBGrp, speed: 0.003 });
+
+            const moonBGrp = new THREE.Group(); planetB.add(moonBGrp);
+            const moonB = new THREE.Mesh(new THREE.SphereGeometry(2, 16, 16), getNeonMaterial(colors.color1));
+            moonB.position.set(18, 0, 0);
+            moonB.userData = { radius: 2 };
+            moonBGrp.add(moonB); interactables.push(moonB);
+            celestialBodies.push({ group: moonBGrp, speed: 0.02 });
+
+            // 3. Planet C (Cyber Yellow Gas Giant with Rings)
+            const pCGrp = new THREE.Group(); scene.add(pCGrp);
+            pCGrp.rotation.y = Math.PI;
+            const planetC = new THREE.Mesh(new THREE.SphereGeometry(18, 32, 32), getNeonMaterial(colors.color6));
+            planetC.position.set(240, 0, 0);
+            planetC.userData = { radius: 18 };
+            pCGrp.add(planetC); interactables.push(planetC);
+            celestialBodies.push({ group: pCGrp, speed: 0.0015 });
+
+            const ringGeo = new THREE.RingGeometry(25, 40, 64);
+            const ringMat = new THREE.MeshBasicMaterial({ color: colors.color2, transparent: true, opacity: 0.5, side: THREE.DoubleSide, wireframe: true });
+            const ring = new THREE.Mesh(ringGeo, ringMat);
+            ring.rotation.x = Math.PI / 2 + 0.3;
+            planetC.add(ring);
+
+            // 4. Planet D (Dark Violet Ice Giant with binary moons)
+            const pDGrp = new THREE.Group(); scene.add(pDGrp);
+            pDGrp.rotation.y = -Math.PI / 3;
+            const planetD = new THREE.Mesh(new THREE.SphereGeometry(12, 16, 16), getNeonMaterial(colors.color5));
+            planetD.position.set(380, 0, 0);
+            planetD.userData = { radius: 12 };
+            pDGrp.add(planetD); interactables.push(planetD);
+            celestialBodies.push({ group: pDGrp, speed: 0.0008 });
+
+            const moonD1Grp = new THREE.Group(); planetD.add(moonD1Grp);
+            const moonD1 = new THREE.Mesh(new THREE.SphereGeometry(1.5, 8, 8), getNeonMaterial(colors.color2));
+            moonD1.position.set(20, 0, 0); moonD1.userData = { radius: 1.5 };
+            moonD1Grp.add(moonD1); interactables.push(moonD1);
+            celestialBodies.push({ group: moonD1Grp, speed: 0.03 });
+
+            const moonD2Grp = new THREE.Group(); planetD.add(moonD2Grp);
+            const moonD2 = new THREE.Mesh(new THREE.SphereGeometry(1, 8, 8), getNeonMaterial(colors.color6));
+            moonD2.position.set(28, 0, 0); moonD2.userData = { radius: 1 };
+            moonD2Grp.add(moonD2); interactables.push(moonD2);
+            celestialBodies.push({ group: moonD2Grp, speed: -0.015 }); // Retrograde
+
+            // 5. Planet E (Deep Space Glitch Anomaly)
+            const pEGrp = new THREE.Group(); scene.add(pEGrp);
+            pEGrp.rotation.y = Math.PI / 2;
+            const planetE = new THREE.Mesh(new THREE.IcosahedronGeometry(20, 1), getNeonMaterial(colors.color7, true));
+            planetE.position.set(550, 0, 0);
+            planetE.userData = { radius: 20 };
+            pEGrp.add(planetE); interactables.push(planetE);
+            celestialBodies.push({ group: pEGrp, speed: 0.0004 });
+
+
+            // Orbit paths (Glowing neon trails)
+            function createOrbitLine(radius, color) {
+                const pts = [];
+                for(let i=0; i<=64; i++) {
+                    const a = (i/64) * Math.PI * 2;
+                    pts.push(new THREE.Vector3(Math.cos(a)*radius, 0, Math.sin(a)*radius));
+                }
+                const geo = new THREE.BufferGeometry().setFromPoints(pts);
+                const mat = new THREE.LineBasicMaterial({ color: color, transparent: true, opacity: 0.3 });
+                return new THREE.Line(geo, mat);
+            }
+            scene.add(createOrbitLine(70, colors.color3));
+            scene.add(createOrbitLine(130, colors.color2));
+            scene.add(createOrbitLine(240, colors.color6));
+            scene.add(createOrbitLine(380, colors.color5));
+            scene.add(createOrbitLine(550, colors.color7));
+
+
+            // --- ANIMATED TACTICAL BRACKET ---
+            const bracketGroup = new THREE.Group();
+            scene.add(bracketGroup);
+            bracketGroup.visible = false;
+            
+            // Outer diamond
+            const brGeo1 = new THREE.OctahedronGeometry(1.5, 0);
+            const brMat1 = new THREE.MeshBasicMaterial({ color: colors.color2, wireframe: true, transparent: true, opacity: 0.8 });
+            const brMesh1 = new THREE.Mesh(brGeo1, brMat1);
+            bracketGroup.add(brMesh1);
+
+            // Inner spinning core
+            const brGeo2 = new THREE.BoxGeometry(1, 1, 1);
+            const brMat2 = new THREE.MeshBasicMaterial({ color: colors.color1, wireframe: true });
+            const brMesh2 = new THREE.Mesh(brGeo2, brMat2);
+            bracketGroup.add(brMesh2);
+
+            // --- INTERACTION & NAVIGATION MATH ---
+            let selectedPOI = planetC; // Lock target to Planet C
+            
+            let shipState = 'ORBITING'; 
+            let targetOrbitRadius = planetC.userData.radius * 3 + 20;
+            let currentOrbitAngle = 0;
+            const orbitVelocity = 0.2; // Drastically slowed down camera orbit spin
+
+            const tempTargetWorldPos = new THREE.Vector3();
+            const idealCameraPos = new THREE.Vector3();
+
+            // Initialize bracket lock immediately
+            bracketGroup.visible = true;
+            const brScale = planetC.userData.radius * 1.5;
+            bracketGroup.scale.set(brScale, brScale, brScale);
+
+            planetC.getWorldPosition(tempTargetWorldPos);
+            const dx = camera.position.x - tempTargetWorldPos.x;
+            const dz = camera.position.z - tempTargetWorldPos.z;
+            currentOrbitAngle = Math.atan2(dz, dx);
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                pixelScale = 1.0 / vaporConfig.performance.resolution_scale;
+                renderer.setSize(window.innerWidth / pixelScale, window.innerHeight / pixelScale, false);
+            });
+
+            // --- ANIMATION LOOP ---
+            const clock = new THREE.Clock();
+            let deltaAccumulator = 0;
+
+            function animate() {
+                requestAnimationFrame(animate);
+                
+                const delta = clock.getDelta();
+                deltaAccumulator += delta;
+                
+                const fpsLimit = vaporConfig.performance.fps_limit;
+                const frameTime = fpsLimit > 0 ? 1.0 / fpsLimit : 0;
+                
+                if (fpsLimit > 0 && deltaAccumulator < frameTime) {
+                    return; // Skip rendering this frame
+                }
+                
+                if (fpsLimit > 0) {
+                    deltaAccumulator -= frameTime;
+                    if (deltaAccumulator > frameTime) deltaAccumulator = frameTime;
+                }
+
+                const time = clock.getElapsedTime();
+                const speed = vaporConfig.wall_specific.speed_multiplier;
+
+                // 1. Orbital Mechanics
+                sun.rotation.y += 0.002 * speed; 
+                sun.scale.setScalar(1 + Math.sin(time * 2 * speed) * 0.03); 
+                
+                planetC.children[0].rotation.z += 0.002 * speed; 
+                planetE.rotation.x += 0.005 * speed; 
+                planetE.rotation.y += 0.01 * speed;
+
+                celestialBodies.forEach(body => {
+                    body.group.rotation.y += body.speed * speed;
+                });
+
+                // 2. Bracket Animations
+                if (bracketGroup.visible && selectedPOI) {
+                    selectedPOI.getWorldPosition(tempTargetWorldPos);
+                    bracketGroup.position.copy(tempTargetWorldPos);
+                    
+                    brMesh1.rotation.y = time * 0.5 * speed;
+                    brMesh1.rotation.x = time * 0.25 * speed;
+                    brMesh2.rotation.y = -time * 0.8 * speed;
+                    brMesh2.rotation.z = time * 0.5 * speed;
+                }
+
+                // 3. EVE-Style Navigation / Swooping Logic
+                if (selectedPOI && shipState === 'ORBITING') {
+                    selectedPOI.getWorldPosition(tempTargetWorldPos);
+
+                    // Calculate ideal orbit speed and angle
+                    const angularSpeed = (orbitVelocity / targetOrbitRadius) * speed;
+                    currentOrbitAngle += angularSpeed;
+
+                    // Calculate exact 3D position to spiral towards
+                    idealCameraPos.set(
+                        tempTargetWorldPos.x + targetOrbitRadius * Math.cos(currentOrbitAngle),
+                        tempTargetWorldPos.y + (targetOrbitRadius * 0.3) * Math.sin(time * 0.5 * speed), 
+                        tempTargetWorldPos.z + targetOrbitRadius * Math.sin(currentOrbitAngle)
+                    );
+
+                    // Swoop the camera to the ideal orbit path (smooth interpolation)
+                    // (we cap the multiplier so it doesn't overshoot if speed is super high)
+                    camera.position.lerp(idealCameraPos, Math.min(0.04 * speed, 1.0));
+                    controls.target.lerp(tempTargetWorldPos, Math.min(0.08 * speed, 1.0));
+                }
+
+                controls.update();
+                renderer.render(scene, camera);
+            }
+
+            animate();
+        }
+    </script>
+</body>
+</html>
