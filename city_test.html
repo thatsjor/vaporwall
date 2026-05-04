@@ -2,43 +2,69 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Isometric Vapor City</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Infinite Isometric Pixel City</title>
     <style>
-        html, body {
-            margin: 0; padding: 0; width: 100%; height: 100%;
-            overflow: hidden; background-color: #000;
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
         }
+
         #canvas-container {
-            width: 100vw; height: 100vh; display: block;
+            width: 100vw;
+            height: 100vh;
+            display: block;
+        }
+
+        canvas {
+            width: 100vw !important;
+            height: 100vh !important;
+            image-rendering: -moz-crisp-edges;
+            image-rendering: -webkit-crisp-edges;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
         }
     </style>
-    <!-- Three.js and Post-Processing for Bloom (Glow) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
 </head>
-<body>
+<body oncontextmenu="return false;">
+
     <div id="canvas-container"></div>
+
     <script>
         let isInitialized = false;
         let vaporConfig = null;
         let vaporColors = null;
-        
-        let renderer, scene, camera, clock, composer;
-        let gridHelper, ambientLight, dirLight;
-        let buildingMesh;
-        let buildingData = [];
-        let citySize = 30; // Grid size NxN
-        let spacing = 15;
-        let scrollSpeed = 10;
-        let pixelScale = 1;
 
-        // Colors array mapped to pywal
-        let neonColors = [];
+        let container, scene, camera, renderer, clock;
+        let ambientLight, underLight, dirLight, lightTarget, ground;
+        let cityMesh, lightMesh, carsMesh;
+        let cars = [], instances = [];
+        let pixelScale = 4;
+        let frustumSize = 35;
+        
+        const gridCols = 60; 
+        const gridRows = 60;
+        const spacing = 2.2; 
+        const totalInstances = gridCols * gridRows;
+        const maxWindows = 48;
+        const wrapLimit = (gridCols / 2) * spacing;
+
+        const dummyMatrix = new THREE.Matrix4();
+        const dummyColor = new THREE.Color();
+        const hexToColor = (hex) => new THREE.Color(hex);
+
+        let randSeed = 42;
+        function seedRandom() {
+            randSeed = (randSeed * 9301 + 49297) % 233280;
+            return randSeed / 233280;
+        }
+
+        function randomHash(x, z) {
+            let n = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453;
+            return n - Math.floor(n);
+        }
 
         window.addEventListener('vaporwall:update', (e) => {
             vaporConfig = e.detail.config;
@@ -57,11 +83,12 @@
             if (!isInitialized) {
                 console.warn("Running with defaults.");
                 vaporConfig = {
-                    performance: { fps_limit: 60, resolution_scale: 1.0, enable_shadows: true, enable_antialiasing: true, detail_level: 1.0 },
-                    wall_specific: { speed_multiplier: 1.0 }
+                    performance: { fps_limit: 60, resolution_scale: 0.25, enable_shadows: true, enable_antialiasing: false, detail_level: 1.0 },
+                    wall_specific: { speed_multiplier: 1.0 },
+                    monitor_data: { mode: "span", total_width: 1920, total_height: 1080, view_x: 0, view_y: 0, view_width: 1920, view_height: 1080 }
                 };
                 vaporColors = {
-                    background: 0x0f0c20, color1: 0xff007c, color2: 0x00f3ff, color3: 0x39ff14,
+                    background: 0x0a0510, color1: 0xff007c, color2: 0x00f3ff, color3: 0x39ff14,
                     color4: 0xffffff, color5: 0x9400d3, color6: 0xfcee0a, color7: 0xff003c
                 };
                 isInitialized = true;
@@ -69,198 +96,321 @@
             }
         }, 500);
 
-        function updateColors() {
-            scene.background.set(vaporColors.background);
-            scene.fog.color.set(vaporColors.background);
-            
-            ambientLight.color.set(vaporColors.color5);
-            dirLight.color.set(vaporColors.color1);
-            gridHelper.material.color.set(vaporColors.color2);
-            
-            neonColors = [
-                new THREE.Color(vaporColors.color1),
-                new THREE.Color(vaporColors.color2),
-                new THREE.Color(vaporColors.color3),
-                new THREE.Color(vaporColors.color6)
+        function getCarColors() {
+            return [
+                vaporColors.color1, vaporColors.color2, vaporColors.color3,
+                vaporColors.color4, vaporColors.color5, vaporColors.color6
             ];
+        }
 
-            // Update instanced colors
-            let colorArray = new Float32Array(citySize * citySize * 3);
-            for(let i=0; i<citySize*citySize; i++) {
-                let c = neonColors[Math.floor(Math.random() * neonColors.length)];
-                c.toArray(colorArray, i*3);
+        function updateBuilding(inst) {
+            const h = randomHash(inst.wx, inst.wz);
+            let height = 0.1; 
+            let scaleX = spacing * 0.85;
+            let scaleZ = spacing * 0.85;
+
+            const isRoadX = Math.abs(inst.wx) % 6 === 0;
+            const isRoadZ = Math.abs(inst.wz) % 6 === 0;
+            const isRoad = isRoadX || isRoadZ;
+
+            if (isRoad) {
+                height = 0.05; 
+                dummyColor.setHex(0x05020a); // Pitch black asphalt
+            } else {
+                height = 2 + h * 10; 
+                
+                // Base Building Color tinted by vaporColors.background
+                let bg = new THREE.Color(vaporColors.background);
+                // Mix in a bit of white for the building base based on hash
+                dummyColor.copy(bg).lerp(new THREE.Color(0xffffff), 0.1 + h * 0.15);
+
+                const h2 = randomHash(inst.wx + 1, inst.wz - 1);
+                scaleX = spacing * (0.5 + (h2 * 0.45));
+                scaleZ = spacing * (0.5 + ((1 - h2) * 0.45));
             }
-            buildingMesh.geometry.setAttribute('color', new THREE.InstancedBufferAttribute(colorArray, 3));
-            buildingMesh.material.emissive.set(0xffffff); // Use vertex colors for emissive multiplier
+
+            dummyMatrix.makeScale(scaleX, height, scaleZ);
+            dummyMatrix.setPosition(inst.wx * spacing, 0, inst.wz * spacing);
+            cityMesh.setMatrixAt(inst.index, dummyMatrix);
+            cityMesh.setColorAt(inst.index, dummyColor);
+
+            let lightCount = 0;
+            
+            dummyMatrix.makeScale(0, 0, 0);
+            for(let w=0; w<maxWindows; w++) {
+                lightMesh.setMatrixAt(inst.index * maxWindows + w, dummyMatrix);
+            }
+
+            const h3 = randomHash(inst.wx * 2, inst.wz * 2);
+            if (!isRoad && h3 > 0.3) {
+                
+                // Pick a window color from the Pywal palette based on a hash
+                const palette = getCarColors();
+                const wColorHex = palette[Math.floor(randomHash(inst.wx*3, inst.wz*3) * palette.length)];
+                dummyColor.setHex(wColorHex);
+                // Slightly desaturate/darken the neon for the actual window body
+                dummyColor.lerp(new THREE.Color(0xffffff), 0.2);
+
+                const faceAxis = h3 > 0.65 ? 'X' : 'Z';
+                const faceWidth = faceAxis === 'Z' ? scaleX : scaleZ;
+                
+                const cols = faceWidth > 2.0 ? 4 : 2; 
+                const rows = Math.floor(height / 1.0); 
+                const colSpacing = faceWidth / (cols + 1);
+                
+                for(let r=0; r<rows; r++) {
+                    for(let c=0; c<cols; c++) {
+                        if (lightCount >= maxWindows) break;
+                        if (randomHash(inst.wx + r * 1.1, inst.wz + c * 1.3) > 0.8) continue;
+                        
+                        let wScale = 0.2; 
+                        let wY = height - 0.5 - (r * 1.0);
+                        
+                        if (wY > 0.5) { 
+                            if (faceAxis === 'Z') {
+                                let wX = inst.wx * spacing - (scaleX/2) + colSpacing * (c + 1);
+                                let wZ = inst.wz * spacing + (scaleZ/2) + 0.08; 
+                                dummyMatrix.makeScale(wScale, wScale, wScale * 0.1); 
+                                dummyMatrix.setPosition(wX, wY, wZ);
+                            } else {
+                                let wZ = inst.wz * spacing - (scaleZ/2) + colSpacing * (c + 1);
+                                let wX = inst.wx * spacing + (scaleX/2) + 0.08;
+                                dummyMatrix.makeScale(wScale * 0.1, wScale, wScale);
+                                dummyMatrix.setPosition(wX, wY, wZ);
+                            }
+                            
+                            lightMesh.setMatrixAt(inst.index * maxWindows + lightCount, dummyMatrix);
+                            lightMesh.setColorAt(inst.index * maxWindows + lightCount, dummyColor);
+                            lightCount++;
+                        }
+                    }
+                }
+            }
         }
 
         function updateDynamicSettings() {
             if (!renderer) return;
             
-            updateColors();
+            // Colors
+            scene.background.setHex(vaporColors.background);
+            if (scene.fog) scene.fog.color.setHex(vaporColors.background);
             
-            pixelScale = 1.0 / (vaporConfig.performance.resolution_scale || 1.0);
-            renderer.setSize(window.innerWidth / pixelScale, window.innerHeight / pixelScale, false);
-            composer.setSize(window.innerWidth / pixelScale, window.innerHeight / pixelScale);
+            ambientLight.color.setHex(vaporColors.background).lerp(new THREE.Color(0xffffff), 0.2);
+            underLight.color.setHex(vaporColors.color2);
+            dirLight.color.setHex(vaporColors.color1);
             
-            renderer.shadowMap.enabled = vaporConfig.performance.enable_shadows;
-        }
+            ground.material.color.setHex(vaporColors.background);
+            let groundEmissive = new THREE.Color(vaporColors.color2).multiplyScalar(0.1);
+            ground.material.emissive.copy(groundEmissive);
 
-        // Generate a window texture
-        function createWindowTexture() {
-            const canvas = document.createElement('canvas');
-            canvas.width = 64; canvas.height = 64;
-            const ctx = canvas.getContext('2d');
-            ctx.fillStyle = '#000'; ctx.fillRect(0,0,64,64);
-            ctx.fillStyle = '#fff';
-            // Draw window grid
-            for(let y=2; y<64; y+=8) {
-                for(let x=2; x<64; x+=8) {
-                    if(Math.random() > 0.3) { // 70% lit windows
-                        ctx.fillRect(x, y, 4, 6);
-                    }
-                }
+            // Re-color cars
+            const palette = getCarColors();
+            for(let i=0; i<cars.length; i++) {
+                cars[i].color.setHex(palette[Math.floor(seedRandom() * palette.length)]);
+                carsMesh.setColorAt(cars[i].index, cars[i].color);
             }
-            const tex = new THREE.CanvasTexture(canvas);
-            tex.wrapS = THREE.RepeatWrapping;
-            tex.wrapT = THREE.RepeatWrapping;
-            tex.magFilter = THREE.NearestFilter;
-            return tex;
+            carsMesh.instanceColor.needsUpdate = true;
+
+            // Re-color buildings
+            for(let i=0; i<instances.length; i++) {
+                updateBuilding(instances[i]);
+            }
+            cityMesh.instanceMatrix.needsUpdate = true;
+            cityMesh.instanceColor.needsUpdate = true;
+            lightMesh.instanceMatrix.needsUpdate = true;
+            lightMesh.instanceColor.needsUpdate = true;
+
+            // Performance
+            pixelScale = 1.0 / (vaporConfig.performance.resolution_scale || 0.25);
+            renderer.setSize(window.innerWidth / pixelScale, window.innerHeight / pixelScale, false); 
+            renderer.shadowMap.enabled = vaporConfig.performance.enable_shadows;
+            
+            // Multi-Monitor Spanning
+            if (vaporConfig.monitor_data && vaporConfig.monitor_data.mode === 'span') {
+                const md = vaporConfig.monitor_data;
+                const aspect = md.total_width / md.total_height;
+                camera.left = frustumSize * aspect / -2; 
+                camera.right = frustumSize * aspect / 2;
+                camera.top = frustumSize / 2; 
+                camera.bottom = frustumSize / -2;
+                camera.setViewOffset(
+                    md.total_width, md.total_height,
+                    md.view_x, md.view_y,
+                    md.view_width, md.view_height
+                );
+            } else {
+                const aspect = window.innerWidth / window.innerHeight;
+                camera.left = frustumSize * aspect / -2; 
+                camera.right = frustumSize * aspect / 2;
+                camera.top = frustumSize / 2; 
+                camera.bottom = frustumSize / -2;
+                camera.clearViewOffset();
+            }
+            camera.updateProjectionMatrix();
         }
 
         function initApp() {
-            const container = document.getElementById('canvas-container');
+            container = document.getElementById('canvas-container');
             scene = new THREE.Scene();
-            
-            // Isometric Camera setup
-            const aspect = window.innerWidth / window.innerHeight;
-            const d = 150; // View size
-            camera = new THREE.OrthographicCamera(-d * aspect, d * aspect, d, -d, 1, 1000);
-            // Isometric rotation: look at origin from an angle
-            camera.position.set(200, 200, 200);
-            camera.lookAt(scene.position);
-            
-            scene.fog = new THREE.Fog(vaporColors.background, 100, 400);
+            scene.background = new THREE.Color(vaporColors.background);
+            scene.fog = new THREE.Fog(vaporColors.background, 45, 85); 
 
-            renderer = new THREE.WebGLRenderer({ antialias: vaporConfig.performance.enable_antialiasing });
-            pixelScale = 1.0 / (vaporConfig.performance.resolution_scale || 1.0);
-            renderer.setSize(window.innerWidth / pixelScale, window.innerHeight / pixelScale, false);
+            let aspect = window.innerWidth / window.innerHeight;
+            if (vaporConfig.monitor_data && vaporConfig.monitor_data.mode === 'span') {
+                aspect = vaporConfig.monitor_data.total_width / vaporConfig.monitor_data.total_height;
+            }
+            camera = new THREE.OrthographicCamera(
+                frustumSize * aspect / -2, frustumSize * aspect / 2, frustumSize / 2, frustumSize / -2, 0.1, 1000
+            );
+            if (vaporConfig.monitor_data && vaporConfig.monitor_data.mode === 'span') {
+                const md = vaporConfig.monitor_data;
+                camera.setViewOffset(md.total_width, md.total_height, md.view_x, md.view_y, md.view_width, md.view_height);
+            }
+            camera.position.set(40, 40, 40);
+            camera.lookAt(0, 0, 0);
+
+            const enableAA = vaporConfig.performance.enable_antialiasing;
+            renderer = new THREE.WebGLRenderer({ antialias: enableAA, alpha: false });
+            
+            pixelScale = 1.0 / (vaporConfig.performance.resolution_scale || 0.25);
+            renderer.setSize(window.innerWidth / pixelScale, window.innerHeight / pixelScale, false); 
             renderer.shadowMap.enabled = vaporConfig.performance.enable_shadows;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
             container.appendChild(renderer.domElement);
 
-            // Lighting
-            ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+            ambientLight = new THREE.AmbientLight(0xffffff, 0.6); 
+            ambientLight.color.setHex(vaporColors.background).lerp(new THREE.Color(0xffffff), 0.2);
             scene.add(ambientLight);
-            
-            dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
-            dirLight.position.set(-100, 200, 100);
+
+            underLight = new THREE.DirectionalLight(vaporColors.color2, 3.0);
+            underLight.position.set(20, -50, -20);
+            scene.add(underLight);
+
+            dirLight = new THREE.DirectionalLight(vaporColors.color1, 1.2); 
+            dirLight.position.set(30, 60, 10);
             dirLight.castShadow = true;
-            dirLight.shadow.camera.left = -200; dirLight.shadow.camera.right = 200;
-            dirLight.shadow.camera.top = 200; dirLight.shadow.camera.bottom = -200;
-            dirLight.shadow.mapSize.width = 2048; dirLight.shadow.mapSize.height = 2048;
+            dirLight.shadow.bias = -0.0005; 
+            dirLight.shadow.normalBias = 0.02; 
+            
+            const d = 50;
+            dirLight.shadow.camera.left = -d; dirLight.shadow.camera.right = d;
+            dirLight.shadow.camera.top = d; dirLight.shadow.camera.bottom = -d;
+            dirLight.shadow.camera.near = 0.1; dirLight.shadow.camera.far = 150;
+            dirLight.shadow.mapSize.width = 1024; dirLight.shadow.mapSize.height = 1024;
             scene.add(dirLight);
 
-            gridHelper = new THREE.GridHelper(1000, 100, vaporColors.color2, vaporColors.color2);
-            gridHelper.position.y = 0.1;
-            scene.add(gridHelper);
+            lightTarget = new THREE.Object3D();
+            scene.add(lightTarget);
+            dirLight.target = lightTarget;
 
-            // Build City with InstancedMesh
-            citySize = Math.floor(30 * (vaporConfig.performance.detail_level || 1.0));
-            const totalBuildings = citySize * citySize;
+            const groundGeo = new THREE.PlaneGeometry(300, 300); 
+            const groundMat = new THREE.MeshStandardMaterial({ 
+                color: vaporColors.background, 
+                emissive: new THREE.Color(vaporColors.color2).multiplyScalar(0.1),
+                roughness: 0.9 
+            });
+            ground = new THREE.Mesh(groundGeo, groundMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = -0.1; 
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+            const geometry = new THREE.BoxGeometry(1, 1, 1);
+            geometry.translate(0, 0.5, 0); 
             
-            const windowTex = createWindowTexture();
-            
-            // A simple box geometry for buildings
-            const geometry = new THREE.BoxGeometry(10, 1, 10);
-            // We want the windows to tile vertically.
-            const uvs = geometry.attributes.uv.array;
-            for(let i=0; i<uvs.length; i+=2) {
-                // we'll scale UVs in the shader or just let them stretch
+            const cityMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, metalness: 0.2 });
+            cityMesh = new THREE.InstancedMesh(geometry, cityMat, totalInstances);
+            cityMesh.castShadow = true;
+            cityMesh.receiveShadow = true;
+            scene.add(cityMesh);
+
+            const lightMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            lightMesh = new THREE.InstancedMesh(geometry, lightMat, totalInstances * maxWindows);
+            scene.add(lightMesh);
+
+            const carCount = Math.floor(600 * (vaporConfig.performance.detail_level || 1.0)); 
+            const carGeo = new THREE.BoxGeometry(0.12, 0.12, 0.12);
+            const carMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            carsMesh = new THREE.InstancedMesh(carGeo, carMat, carCount);
+            scene.add(carsMesh);
+
+            const palette = getCarColors();
+            for(let i=0; i<carCount; i++) {
+                let isXRoad = seedRandom() > 0.5;
+                let roadCoord = (Math.floor(seedRandom() * gridCols) - Math.floor(gridCols/2));
+                roadCoord = roadCoord - (roadCoord % 6); 
+                let alongCoord = (Math.floor(seedRandom() * gridCols) - Math.floor(gridCols/2));
+
+                let isHighAltitude = seedRandom() > 0.99; 
+                let baseSpeed = 0.08 + seedRandom() * 0.12; 
+                if (isHighAltitude) baseSpeed *= 1.5; 
+
+                let direction = seedRandom() > 0.5 ? 1 : -1;
+                let laneOffset = direction * 0.25 * spacing; 
+
+                let px = 0, pz = 0, dx = 0, dz = 0;
+
+                if (isXRoad) { 
+                    px = alongCoord * spacing; pz = roadCoord * spacing + laneOffset; dx = baseSpeed * direction;
+                } else { 
+                    px = roadCoord * spacing + laneOffset; pz = alongCoord * spacing; dz = baseSpeed * direction;
+                }
+
+                let y = 0; let baseScale = 1.0;
+                if (isHighAltitude) {
+                    let level = Math.floor(seedRandom() * 3);
+                    y = 14.0 + level * 4.0; 
+                    baseScale = 1.2; 
+                    if (isXRoad) pz += (seedRandom() - 0.5) * spacing * 4;
+                    else px += (seedRandom() - 0.5) * spacing * 4;
+                } else {
+                    let level = Math.floor(seedRandom() * 4); 
+                    y = 0.5 + level * 1.5; 
+                    baseScale = 1.0;
+                }
+
+                cars.push({
+                    index: i, x: px, y: y, z: pz, dx: dx, dz: dz, baseSpeed: baseSpeed, direction: direction,
+                    baseScale: baseScale, color: new THREE.Color(palette[Math.floor(seedRandom() * palette.length)])
+                });
             }
 
-            // Material with emissive mapping for windows
-            const material = new THREE.MeshStandardMaterial({
-                color: 0x111122,
-                roughness: 0.8,
-                emissiveMap: windowTex,
-                emissive: 0xffffff,
-                emissiveIntensity: 1.5, // Will be colored by vertex colors
-                vertexColors: true
-            });
-
-            // Adjust standard shader to use vertex color ONLY for emissive tinting, not diffuse
-            material.onBeforeCompile = (shader) => {
-                shader.fragmentShader = shader.fragmentShader.replace(
-                    '#include <emissivemap_fragment>',
-                    `
-                    #ifdef USE_EMISSIVEMAP
-                        vec4 emissiveColor = texture2D( emissiveMap, vUv );
-                        // Tile UVs based on instance scale (approximate by looking at varying position)
-                        // Actually easier: just use world position for triplanar, but let's keep it simple.
-                        // Multiply the white windows by the instance vertex color
-                        totalEmissiveRadiance *= emissiveColor.r * vColor.rgb;
-                    #endif
-                    `
-                );
-            };
-
-            buildingMesh = new THREE.InstancedMesh(geometry, material, totalBuildings);
-            buildingMesh.castShadow = true;
-            buildingMesh.receiveShadow = true;
-
-            let idx = 0;
-            const dummy = new THREE.Object3D();
-            
-            for(let z=0; z<citySize; z++) {
-                for(let x=0; x<citySize; x++) {
-                    let height = Math.random() * 30 + 10;
-                    if(Math.random() > 0.8) height += 40; // Skyscrapers
-                    
-                    let posX = (x - citySize/2) * spacing;
-                    let posZ = (z - citySize/2) * spacing;
-                    
-                    buildingData.push({
-                        baseX: posX,
-                        baseZ: posZ,
-                        height: height
-                    });
-                    
-                    dummy.position.set(posX, height/2, posZ);
-                    dummy.scale.set(1, height, 1);
-                    dummy.updateMatrix();
-                    buildingMesh.setMatrixAt(idx, dummy.matrix);
-                    idx++;
+            let instIdx = 0;
+            for (let x = 0; x < gridCols; x++) {
+                for (let z = 0; z < gridRows; z++) {
+                    const inst = { index: instIdx++, wx: x - Math.floor(gridCols/2), wz: z - Math.floor(gridRows/2) };
+                    instances.push(inst);
+                    updateBuilding(inst);
                 }
             }
-            scene.add(buildingMesh);
-            
-            // Post-Processing (Bloom for glowing windows)
-            const renderScene = new THREE.RenderPass(scene, camera);
-            composer = new THREE.EffectComposer(renderer);
-            composer.addPass(renderScene);
 
-            // Add bloom if details/shadows are enabled (proxy for high quality)
-            if (vaporConfig.performance.enable_shadows) {
-                const bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
-                bloomPass.threshold = 0.2;
-                bloomPass.strength = 1.2; // Glow intensity
-                bloomPass.radius = 0.5;
-                composer.addPass(bloomPass);
-            }
+            cityMesh.instanceMatrix.needsUpdate = true;
+            cityMesh.instanceColor.needsUpdate = true;
+            lightMesh.instanceMatrix.needsUpdate = true;
+            lightMesh.instanceColor.needsUpdate = true;
 
-            updateColors();
+            let targetX = 0;
+            let targetZ = 0;
 
             window.addEventListener('resize', () => {
-                const aspect = window.innerWidth / window.innerHeight;
-                camera.left = -d * aspect;
-                camera.right = d * aspect;
-                camera.top = d;
-                camera.bottom = -d;
+                let aspect = window.innerWidth / window.innerHeight;
+                if (vaporConfig.monitor_data && vaporConfig.monitor_data.mode === 'span') {
+                    aspect = vaporConfig.monitor_data.total_width / vaporConfig.monitor_data.total_height;
+                }
+                camera.left = frustumSize * aspect / -2; camera.right = frustumSize * aspect / 2;
+                camera.top = frustumSize / 2; camera.bottom = frustumSize / -2;
+                
+                if (vaporConfig.monitor_data && vaporConfig.monitor_data.mode === 'span') {
+                    const md = vaporConfig.monitor_data;
+                    camera.setViewOffset(md.total_width, md.total_height, md.view_x, md.view_y, md.view_width, md.view_height);
+                } else {
+                    camera.clearViewOffset();
+                }
+                
                 camera.updateProjectionMatrix();
                 
-                pixelScale = 1.0 / (vaporConfig.performance.resolution_scale || 1.0);
+                pixelScale = 1.0 / (vaporConfig.performance.resolution_scale || 0.25);
                 renderer.setSize(window.innerWidth / pixelScale, window.innerHeight / pixelScale, false);
-                composer.setSize(window.innerWidth / pixelScale, window.innerHeight / pixelScale);
             });
 
             clock = new THREE.Clock();
@@ -268,10 +418,11 @@
 
             function animate() {
                 requestAnimationFrame(animate);
+                
                 const delta = clock.getDelta();
                 deltaAccumulator += delta;
                 
-                const fpsLimit = vaporConfig.performance.fps_limit || 60;
+                const fpsLimit = vaporConfig.performance.fps_limit;
                 const frameTime = fpsLimit > 0 ? 1.0 / fpsLimit : 0;
                 
                 if (fpsLimit > 0 && deltaAccumulator < frameTime) return;
@@ -280,47 +431,72 @@
                     if (deltaAccumulator > frameTime) deltaAccumulator = frameTime;
                 }
 
-                const time = clock.getElapsedTime();
-                const speed = (vaporConfig.wall_specific.speed_multiplier || 1.0);
+                const speed = vaporConfig.wall_specific.speed_multiplier;
 
-                // Scroll the city
-                // We move the camera over the instanced mesh. When it moves past a row, we warp the row to the front.
-                camera.position.x += scrollSpeed * delta * speed;
-                camera.position.z += scrollSpeed * delta * speed;
+                // Use deterministic time so all monitors pan perfectly in sync
+                const globalTime = clock.getElapsedTime();
                 
-                // Keep the lookAt point moving with the camera to maintain angle
-                const camOffset = 200;
-                camera.position.y = camOffset; 
-                camera.lookAt(camera.position.x - camOffset, 0, camera.position.z - camOffset);
+                targetX = Math.cos(globalTime * 0.05 * speed) * 50 + (globalTime * 0.2 * speed);
+                targetZ = Math.sin(globalTime * 0.07 * speed) * 50 + (globalTime * 0.15 * speed);
 
-                // Wrap buildings around
-                let moved = false;
-                const halfGrid = (citySize * spacing) / 2;
-                for(let i=0; i<totalBuildings; i++) {
-                    let b = buildingData[i];
-                    let relX = b.baseX - camera.position.x;
-                    let relZ = b.baseZ - camera.position.z;
-                    
-                    if (relX < -halfGrid) { b.baseX += citySize * spacing; moved = true; }
-                    if (relZ < -halfGrid) { b.baseZ += citySize * spacing; moved = true; }
-                    
-                    if (moved) {
-                        dummy.position.set(b.baseX, b.height/2, b.baseZ);
-                        dummy.scale.set(1, b.height, 1);
-                        dummy.updateMatrix();
-                        buildingMesh.setMatrixAt(i, dummy.matrix);
-                    }
-                }
-                
-                if (moved) {
-                    buildingMesh.instanceMatrix.needsUpdate = true;
+                camera.position.set(targetX + 40, 40, targetZ + 40);
+                camera.lookAt(targetX, 0, targetZ);
+
+                dirLight.position.set(targetX + 30, 60, targetZ + 10);
+                lightTarget.position.set(targetX, 0, targetZ);
+                underLight.position.set(targetX + 20, -50, targetZ - 20); 
+                ground.position.set(targetX, -0.1, targetZ);
+
+                let meshNeedsUpdate = false;
+                for (let i = 0; i < instances.length; i++) {
+                    const inst = instances[i];
+                    const dx = (inst.wx * spacing) - targetX;
+                    const dz = (inst.wz * spacing) - targetZ;
+
+                    if (dx > wrapLimit) { inst.wx -= gridCols; updateBuilding(inst); meshNeedsUpdate = true; } 
+                    else if (dx < -wrapLimit) { inst.wx += gridCols; updateBuilding(inst); meshNeedsUpdate = true; }
+
+                    if (dz > wrapLimit) { inst.wz -= gridRows; updateBuilding(inst); meshNeedsUpdate = true; } 
+                    else if (dz < -wrapLimit) { inst.wz += gridRows; updateBuilding(inst); meshNeedsUpdate = true; }
                 }
 
-                // Move grid along with camera but snap to spacing
-                gridHelper.position.x = Math.floor(camera.position.x / spacing) * spacing;
-                gridHelper.position.z = Math.floor(camera.position.z / spacing) * spacing;
+                if (meshNeedsUpdate) {
+                    cityMesh.instanceMatrix.needsUpdate = true;
+                    cityMesh.instanceColor.needsUpdate = true;
+                    lightMesh.instanceMatrix.needsUpdate = true;
+                    lightMesh.instanceColor.needsUpdate = true;
+                }
 
-                composer.render();
+                for (let i = 0; i < cars.length; i++) {
+                    let c = cars[i];
+                    // update dx/dz based on speed multiplier
+                    let curDx = c.dx * speed;
+                    let curDz = c.dz * speed;
+                    
+                    c.x += curDx;
+                    c.z += curDz;
+
+                    let diffX = c.x - targetX;
+                    let diffZ = c.z - targetZ;
+
+                    if (diffX > wrapLimit) c.x -= wrapLimit * 2;
+                    else if (diffX < -wrapLimit) c.x += wrapLimit * 2;
+
+                    if (diffZ > wrapLimit) c.z -= wrapLimit * 2;
+                    else if (diffZ < -wrapLimit) c.z += wrapLimit * 2;
+
+                    let scaleX = (c.dx !== 0 ? 5.0 : 1.0) * c.baseScale;
+                    let scaleY = 1.0 * c.baseScale;
+                    let scaleZ = (c.dz !== 0 ? 5.0 : 1.0) * c.baseScale;
+
+                    dummyMatrix.makeScale(scaleX, scaleY, scaleZ);
+                    dummyMatrix.setPosition(c.x, c.y, c.z);
+                    carsMesh.setMatrixAt(c.index, dummyMatrix);
+                }
+                
+                carsMesh.instanceMatrix.needsUpdate = true;
+
+                renderer.render(scene, camera);
             }
 
             animate();
