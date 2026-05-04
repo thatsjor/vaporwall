@@ -415,21 +415,11 @@
 
             clock = new THREE.Clock();
             let deltaAccumulator = 0;
-            let smoothTime = 0;
-            // Wrap period: the time it takes for the linear drift to traverse
-            // one full grid cycle, so we can loop seamlessly.
-            // Linear X drift per second = 0.2 * speed, grid width = gridCols * spacing
-            // Period = gridCols * spacing / (0.2 * 1.0) = 60 * 2.2 / 0.2 = 660s
-            // We also need cos/sin oscillation periods to align. LCM approach is
-            // impractical, so instead we just wrap smoothTime at a large-but-bounded
-            // value and reset the camera position. We pick a cycle that is a multiple
-            // of the grid size for the linear component.
-            const wrapPeriod = (gridCols * spacing) / 0.2; // ~660s at speed=1
 
             function animate() {
                 requestAnimationFrame(animate);
                 
-                const delta = Math.min(clock.getDelta(), 0.1); // clamp to avoid huge jumps
+                const delta = clock.getDelta();
                 deltaAccumulator += delta;
                 
                 const fpsLimit = vaporConfig.performance.fps_limit;
@@ -443,18 +433,11 @@
 
                 const speed = vaporConfig.wall_specific.speed_multiplier;
 
-                // Accumulate time manually so we can wrap it to prevent
-                // floating-point precision loss at large elapsed times.
-                smoothTime += delta * speed;
-                // Wrap smoothTime to keep coordinates bounded.
-                // The linear terms produce a displacement of exactly
-                // gridCols*spacing over one wrapPeriod, so wrapping is seamless.
-                if (smoothTime > wrapPeriod) {
-                    smoothTime -= wrapPeriod;
-                }
+                // Use deterministic time so all monitors pan perfectly in sync
+                const globalTime = clock.getElapsedTime();
                 
-                targetX = Math.cos(smoothTime * 0.05) * 50 + (smoothTime * 0.2);
-                targetZ = Math.sin(smoothTime * 0.07) * 50 + (smoothTime * 0.15);
+                targetX = Math.cos(globalTime * 0.05 * speed) * 50 + (globalTime * 0.2 * speed);
+                targetZ = Math.sin(globalTime * 0.07 * speed) * 50 + (globalTime * 0.15 * speed);
 
                 camera.position.set(targetX + 40, 40, targetZ + 40);
                 camera.lookAt(targetX, 0, targetZ);

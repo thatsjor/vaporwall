@@ -14,9 +14,14 @@
             background-color: transparent;
             font-family: 'Courier New', Courier, monospace;
             user-select: none;
+            touch-action: none;
+            -webkit-overflow-scrolling: none;
         }
 
         #canvas-container {
+            position: fixed;
+            top: 0;
+            left: 0;
             width: 100vw;
             height: 100vh;
             display: block;
@@ -38,6 +43,13 @@
 <body oncontextmenu="return false;">
 
     <div id="canvas-container"></div>
+
+    <script>
+        // Prevent any accidental scrolling in WebKit webviews
+        window.addEventListener('wheel', (e) => e.preventDefault(), { passive: false });
+        window.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+        window.addEventListener('scroll', () => window.scrollTo(0, 0));
+    </script>
 
     <script>
         let isInitialized = false;
@@ -331,11 +343,18 @@
             // --- ANIMATION LOOP ---
             clock = new THREE.Clock();
             let deltaAccumulator = 0;
+            // Manual time accumulator — avoids the Three.js bug where calling
+            // both getDelta() and getElapsedTime() in the same frame double-counts
+            // time (getElapsedTime internally calls getDelta again). Over long
+            // runtimes this inflated time, progressively speeding up animations.
+            let manualTime = 0;
 
             function animate() {
                 requestAnimationFrame(animate);
                 
-                const delta = clock.getDelta();
+                // Clamp delta to prevent huge jumps when webview is
+                // suspended (e.g. screen lock) and then resumed.
+                const delta = Math.min(clock.getDelta(), 0.1);
                 deltaAccumulator += delta;
                 const fpsLimit = vaporConfig.performance.fps_limit;
                 const frameTime = fpsLimit > 0 ? 1.0 / fpsLimit : 0;
@@ -347,8 +366,9 @@
                     if (deltaAccumulator > frameTime) deltaAccumulator = frameTime;
                 }
 
-                const time = clock.getElapsedTime();
                 const speed = vaporConfig.wall_specific.speed_multiplier;
+                manualTime += delta * speed;
+                const time = manualTime;
 
                 if (sun.initialRotation === undefined) {
                     sun.initialRotation = sun.rotation.y;
@@ -357,36 +377,36 @@
                     planetE.initialRotationY = planetE.rotation.y;
                 }
 
-                sun.rotation.y = sun.initialRotation + time * 0.002 * speed * 60.0; 
-                sun.scale.setScalar(1 + Math.sin(time * 2 * speed) * 0.03); 
-                planetC.children[0].rotation.z = planetC.children[0].initialRotation + time * 0.002 * speed * 60.0; 
-                planetE.rotation.x = planetE.initialRotationX + time * 0.005 * speed * 60.0; 
-                planetE.rotation.y = planetE.initialRotationY + time * 0.01 * speed * 60.0;
+                sun.rotation.y = sun.initialRotation + time * 0.002 * 60.0; 
+                sun.scale.setScalar(1 + Math.sin(time * 2) * 0.03); 
+                planetC.children[0].rotation.z = planetC.children[0].initialRotation + time * 0.002 * 60.0; 
+                planetE.rotation.x = planetE.initialRotationX + time * 0.005 * 60.0; 
+                planetE.rotation.y = planetE.initialRotationY + time * 0.01 * 60.0;
 
                 celestialBodies.forEach(body => {
                     if (body.initialRotation === undefined) body.initialRotation = body.group.rotation.y;
-                    body.group.rotation.y = body.initialRotation + time * body.speed * speed * 60.0;
+                    body.group.rotation.y = body.initialRotation + time * body.speed * 60.0;
                 });
 
                 if (bracketGroup.visible && selectedPOI) {
                     selectedPOI.getWorldPosition(tempTargetWorldPos);
                     bracketGroup.position.copy(tempTargetWorldPos);
                     
-                    brMesh1.rotation.y = time * 0.5 * speed;
-                    brMesh1.rotation.x = time * 0.25 * speed;
-                    brMesh2.rotation.y = -time * 0.8 * speed;
-                    brMesh2.rotation.z = time * 0.5 * speed;
+                    brMesh1.rotation.y = time * 0.5;
+                    brMesh1.rotation.x = time * 0.25;
+                    brMesh2.rotation.y = -time * 0.8;
+                    brMesh2.rotation.z = time * 0.5;
                 }
 
                 if (selectedPOI && shipState === 'ORBITING') {
                     selectedPOI.getWorldPosition(tempTargetWorldPos);
-                    const angularSpeed = (orbitVelocity / targetOrbitRadius) * speed;
+                    const angularSpeed = (orbitVelocity / targetOrbitRadius);
                     if (window.initialOrbitAngle === undefined) window.initialOrbitAngle = currentOrbitAngle;
                     currentOrbitAngle = window.initialOrbitAngle + time * angularSpeed * 60.0;
 
                     idealCameraPos.set(
                         tempTargetWorldPos.x + targetOrbitRadius * Math.cos(currentOrbitAngle),
-                        tempTargetWorldPos.y + (targetOrbitRadius * 0.3) * Math.sin(time * 0.5 * speed), 
+                        tempTargetWorldPos.y + (targetOrbitRadius * 0.3) * Math.sin(time * 0.5), 
                         tempTargetWorldPos.z + targetOrbitRadius * Math.sin(currentOrbitAngle)
                     );
 
