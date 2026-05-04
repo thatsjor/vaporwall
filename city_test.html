@@ -9,6 +9,9 @@
             margin: 0;
             overflow: hidden;
             background-color: #000;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
         }
 
         #canvas-container {
@@ -33,6 +36,15 @@
     <div id="canvas-container"></div>
 
     <script>
+        // Prevent all zooming and scrolling
+        window.addEventListener('wheel', (e) => e.preventDefault(), { passive: false });
+        window.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+        window.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && (e.key === '=' || e.key === '-' || e.key === '0')) {
+                e.preventDefault();
+            }
+        });
+
         let isInitialized = false;
         let vaporConfig = null;
         let vaporColors = null;
@@ -205,8 +217,13 @@
 
             // Re-color cars
             const palette = getCarColors();
+            const flyingPalette = [vaporColors.color7, vaporColors.color4, vaporColors.color2];
             for(let i=0; i<cars.length; i++) {
-                cars[i].color.setHex(palette[Math.floor(seedRandom() * palette.length)]);
+                let carColorHex = palette[Math.floor(seedRandom() * palette.length)];
+                if (cars[i].isHighAltitude) {
+                    carColorHex = flyingPalette[Math.floor(seedRandom() * flyingPalette.length)];
+                }
+                cars[i].color.setHex(carColorHex);
                 carsMesh.setColorAt(cars[i].index, cars[i].color);
             }
             carsMesh.instanceColor.needsUpdate = true;
@@ -342,8 +359,8 @@
                 let alongCoord = (Math.floor(seedRandom() * gridCols) - Math.floor(gridCols/2));
 
                 let isHighAltitude = seedRandom() > 0.99; 
-                let baseSpeed = 0.08 + seedRandom() * 0.12; 
-                if (isHighAltitude) baseSpeed *= 1.5; 
+                let baseSpeed = (0.08 + seedRandom() * 0.12) * 3.0; 
+                if (isHighAltitude) baseSpeed *= 3.0; 
 
                 let direction = seedRandom() > 0.5 ? 1 : -1;
                 let laneOffset = direction * 0.25 * spacing; 
@@ -369,9 +386,15 @@
                     baseScale = 1.0;
                 }
 
+                let carColorHex = palette[Math.floor(seedRandom() * palette.length)];
+                if (isHighAltitude) {
+                    const flyingPalette = [vaporColors.color7, vaporColors.color4, vaporColors.color2];
+                    carColorHex = flyingPalette[Math.floor(seedRandom() * flyingPalette.length)];
+                }
+
                 cars.push({
                     index: i, x: px, y: y, z: pz, dx: dx, dz: dz, baseSpeed: baseSpeed, direction: direction,
-                    baseScale: baseScale, color: new THREE.Color(palette[Math.floor(seedRandom() * palette.length)])
+                    baseScale: baseScale, color: new THREE.Color(carColorHex), isHighAltitude: isHighAltitude
                 });
             }
 
